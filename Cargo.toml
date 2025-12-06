@@ -42,6 +42,7 @@ members = [
     "crates/ahm", # Asynchronous Hash Map for concurrent data structures
     "crates/mcp", # MCP server for S3 operations
     "crates/kms", # Key Management Service
+    "crates/trace-analytics", # Trace analytics layer
 ]
 resolver = "2"
 

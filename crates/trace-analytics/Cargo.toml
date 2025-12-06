@@ -1,0 +1,23 @@
+[package]
+name = "rustfs-trace-analytics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+homepage.workspace = true
+description = "Trace analytics layer for RustFS using Apache Arrow and Parquet"
+
+[dependencies]
+rustfs-ecstore = { workspace = true }
+rustfs-rio = { workspace = true }
+datafusion = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+tracing = { workspace = true }
+bytes = { workspace = true }
+thiserror = "1.0"
+object_store = { version = "0.12", features = ["aws"] }
+url = "2.5"
