@@ -32,6 +32,7 @@ use crate::server::{
 };
 use crate::storage::ecfs::{process_lambda_configurations, process_queue_configurations, process_topic_configurations};
 use chrono::Datelike;
+use chrono::Utc;
 use clap::Parser;
 use license::init_license;
 use rustfs_ahm::{
@@ -49,10 +50,6 @@ use rustfs_ecstore::config::GLOBAL_CONFIG_SYS;
 use rustfs_ecstore::store_api::BucketOptions;
 use rustfs_ecstore::store_api::MakeBucketOptions;
 use rustfs_ecstore::store_api::ObjectIO;
-use rustfs_trace_analytics::{TraceRecord, TraceWriter};
-use chrono::Utc;
-use std::collections::HashMap;
-use std::time::Duration;
 use rustfs_ecstore::{
     StorageAPI,
     endpoints::EndpointServerPools,
@@ -67,12 +64,15 @@ use rustfs_iam::init_iam_sys;
 use rustfs_notify::notifier_global;
 use rustfs_obs::{init_obs, set_global_guard};
 use rustfs_targets::arn::TargetID;
+use rustfs_trace_analytics::{TraceRecord, TraceWriter};
 use rustfs_utils::net::parse_and_resolve_address;
 use s3s::s3_error;
+use std::collections::HashMap;
 use std::env;
 use std::io::{Error, Result};
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, instrument, warn};
 
@@ -324,21 +324,18 @@ async fn run(opt: config::Opt) -> Result<()> {
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(10);
-        let ctx_clone = ctx.clone();
 
         tokio::spawn(async move {
             let interval_ms = if rate == 0 { 1000 } else { 1000 / rate.max(1) };
             let mut ticker = tokio::time::interval(Duration::from_millis(interval_ms));
+
             loop {
                 tokio::select! {
-                    _ = ctx_clone.cancelled() => {
-                        let _ = writer.flush().await;
-                        break;
-                    }
                     _ = ticker.tick() => {
                         let mut tags = HashMap::new();
                         tags.insert("http.method".to_string(), "GET".to_string());
                         tags.insert("component".to_string(), "trace-writer".to_string());
+
                         let rec = TraceRecord {
                             trace_id: uuid::Uuid::new_v4().to_string(),
                             span_id: uuid::Uuid::new_v4().to_string(),
@@ -351,7 +348,10 @@ async fn run(opt: config::Opt) -> Result<()> {
                             status_message: None,
                             tags,
                         };
-                        let _ = writer.write(rec).await;
+
+                        if let Err(e) = writer.write(rec).await {
+                            tracing::error!("TraceWriter write error: {:?}", e);
+                        }
                     }
                 }
             }
@@ -534,7 +534,7 @@ fn init_update_check() {
         use crate::update::{UpdateCheckError, check_updates};
 
         // Add timeout to prevent hanging network calls
-        match tokio::time::timeout(std::time::Duration::from_secs(30), check_updates()).await {
+        match tokio::time::timeout(Duration::from_secs(30), check_updates()).await {
             Ok(Ok(result)) => {
                 if result.update_available {
                     if let Some(latest) = &result.latest_version {
@@ -637,7 +637,7 @@ async fn init_kms_system(opt: &config::Opt) -> Result<()> {
                         file_permissions: Some(0o600),
                     }),
                     default_key_id: opt.kms_default_key_id.clone(),
-                    timeout: std::time::Duration::from_secs(30),
+                    timeout: Duration::from_secs(30),
                     retry_attempts: 3,
                     enable_cache: true,
                     cache_config: rustfs_kms::config::CacheConfig::default(),
@@ -667,7 +667,7 @@ async fn init_kms_system(opt: &config::Opt) -> Result<()> {
                         tls: None,
                     }),
                     default_key_id: opt.kms_default_key_id.clone(),
-                    timeout: std::time::Duration::from_secs(30),
+                    timeout: Duration::from_secs(30),
                     retry_attempts: 3,
                     enable_cache: true,
                     cache_config: rustfs_kms::config::CacheConfig::default(),
