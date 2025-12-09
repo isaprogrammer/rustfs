@@ -311,11 +311,11 @@ async fn run(opt: config::Opt) -> Result<()> {
         let buf_size = env::var("RUSTFS_TRACE_BUFFER")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
-            .unwrap_or(200);
+            .unwrap_or(20000);
         let flush_secs = env::var("RUSTFS_TRACE_FLUSH_SECS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(5);
+            .unwrap_or(60);
 
         let store_io: Arc<dyn ObjectIO> = store.clone();
         let writer = TraceWriter::new(trace_bucket.clone(), buf_size, Duration::from_secs(flush_secs), store_io);

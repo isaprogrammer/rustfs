@@ -39,8 +39,8 @@ impl TraceRecord {
                         "entries",
                         DataType::Struct(
                             vec![
-                                Field::new("key", DataType::Utf8, false),
-                                Field::new("value", DataType::Utf8, true),
+                                Field::new("keys", DataType::Utf8, false),
+                                Field::new("values", DataType::Utf8, true),
                             ]
                             .into(),
                         ),
