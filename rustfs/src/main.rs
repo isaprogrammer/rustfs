@@ -47,6 +47,12 @@ use rustfs_ecstore::bucket::replication::{GLOBAL_REPLICATION_POOL, init_backgrou
 use rustfs_ecstore::config as ecconfig;
 use rustfs_ecstore::config::GLOBAL_CONFIG_SYS;
 use rustfs_ecstore::store_api::BucketOptions;
+use rustfs_ecstore::store_api::MakeBucketOptions;
+use rustfs_ecstore::store_api::ObjectIO;
+use rustfs_trace_analytics::{TraceRecord, TraceWriter};
+use chrono::Utc;
+use std::collections::HashMap;
+use std::time::Duration;
 use rustfs_ecstore::{
     StorageAPI,
     endpoints::EndpointServerPools,
@@ -283,6 +289,74 @@ async fn run(opt: config::Opt) -> Result<()> {
     }
 
     init_bucket_metadata_sys(store.clone(), buckets.clone()).await;
+
+    let trace_enable = parse_bool_env_var("RUSTFS_TRACE_ENABLE", true);
+    if trace_enable {
+        let trace_bucket = env::var("RUSTFS_TRACE_BUCKET").unwrap_or_else(|_| "analytics".to_string());
+        let exists = {
+            let list = store
+                .list_bucket(&BucketOptions { ..Default::default() })
+                .await
+                .map_err(Error::other)?;
+            list.iter().any(|b| b.name == trace_bucket)
+        };
+        if !exists {
+            store
+                .make_bucket(&trace_bucket, &MakeBucketOptions::default())
+                .await
+                .map_err(Error::other)?;
+            info!(target: "rustfs::main::run", bucket = %trace_bucket, "Trace bucket created");
+        }
+
+        let buf_size = env::var("RUSTFS_TRACE_BUFFER")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(200);
+        let flush_secs = env::var("RUSTFS_TRACE_FLUSH_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(5);
+
+        let store_io: Arc<dyn ObjectIO> = store.clone();
+        let writer = TraceWriter::new(trace_bucket.clone(), buf_size, Duration::from_secs(flush_secs), store_io);
+
+        let rate = env::var("RUSTFS_TRACE_RATE")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(10);
+        let ctx_clone = ctx.clone();
+
+        tokio::spawn(async move {
+            let interval_ms = if rate == 0 { 1000 } else { 1000 / rate.max(1) };
+            let mut ticker = tokio::time::interval(Duration::from_millis(interval_ms));
+            loop {
+                tokio::select! {
+                    _ = ctx_clone.cancelled() => {
+                        let _ = writer.flush().await;
+                        break;
+                    }
+                    _ = ticker.tick() => {
+                        let mut tags = HashMap::new();
+                        tags.insert("http.method".to_string(), "GET".to_string());
+                        tags.insert("component".to_string(), "trace-writer".to_string());
+                        let rec = TraceRecord {
+                            trace_id: uuid::Uuid::new_v4().to_string(),
+                            span_id: uuid::Uuid::new_v4().to_string(),
+                            parent_span_id: None,
+                            service_name: "rustfs".to_string(),
+                            operation_name: "background-trace".to_string(),
+                            start_time: Utc::now(),
+                            duration_ns: 50_000,
+                            status_code: 0,
+                            status_message: None,
+                            tags,
+                        };
+                        let _ = writer.write(rec).await;
+                    }
+                }
+            }
+        });
+    }
 
     init_iam_sys(store.clone()).await.map_err(Error::other)?;
 

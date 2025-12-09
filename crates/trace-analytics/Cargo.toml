@@ -20,4 +20,14 @@ tracing = { workspace = true }
 bytes = { workspace = true }
 thiserror = "1.0"
 object_store = { version = "0.12", features = ["aws"] }
-url = "2.5"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["async_tokio"] }
+async-trait = "0.1"
+http = "1.0"
+uuid = { version = "1.10", features = ["v4"] }
+
+[[bench]]
+name = "trace_benchmark"
+harness = false
+

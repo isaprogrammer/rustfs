@@ -2,11 +2,14 @@ use crate::error::Result;
 use crate::schema::TraceRecord;
 use bytes::Bytes;
 use chrono::{Datelike, Timelike, Utc};
-use datafusion::arrow::array::{ArrayRef, Int32Builder, MapBuilder, StringBuilder, TimestampMicrosecondBuilder, UInt64Builder};
+use datafusion::arrow::array::{
+    Array, ArrayRef, Int32Builder, MapBuilder, StringBuilder, TimestampMicrosecondArray, TimestampMicrosecondBuilder,
+    UInt64Builder,
+};
+use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::parquet::file::properties::WriterProperties;
-use rustfs_ecstore::new_object_layer_fn;
 use rustfs_ecstore::store_api::{ObjectIO, ObjectOptions, PutObjReader};
 use rustfs_rio::{HashReader, WarpReader};
 use std::sync::Arc;
@@ -19,15 +22,22 @@ pub struct TraceWriter {
     max_buffer_size: usize,
     flush_interval: Duration,
     bucket_name: String,
+    store: Arc<dyn ObjectIO>,
 }
 
 impl TraceWriter {
-    pub fn new(bucket_name: String, max_buffer_size: usize, flush_interval: Duration) -> Self {
+    pub fn new(
+        bucket_name: String,
+        max_buffer_size: usize,
+        flush_interval: Duration,
+        store: Arc<dyn ObjectIO>,
+    ) -> Self {
         let writer = Self {
             buffer: Arc::new(Mutex::new(Vec::with_capacity(max_buffer_size))),
             max_buffer_size,
             flush_interval,
             bucket_name,
+            store,
         };
 
         writer.start_flush_task();
@@ -38,12 +48,13 @@ impl TraceWriter {
         let buffer = self.buffer.clone();
         let interval_duration = self.flush_interval;
         let bucket = self.bucket_name.clone();
+        let store = self.store.clone();
 
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(interval_duration);
             loop {
                 interval.tick().await;
-                if let Err(e) = Self::flush_buffer(&buffer, &bucket).await {
+                if let Err(e) = Self::flush_buffer(&buffer, &bucket, store.clone()).await {
                     error!("Failed to flush trace buffer: {:?}", e);
                 }
             }
@@ -61,8 +72,9 @@ impl TraceWriter {
             drop(buffer);
 
             let bucket = self.bucket_name.clone();
+            let store = self.store.clone();
             tokio::spawn(async move {
-                if let Err(e) = Self::write_records(buffer_to_flush, &bucket).await {
+                if let Err(e) = Self::write_records(buffer_to_flush, &bucket, store).await {
                     error!("Failed to flush full trace buffer: {:?}", e);
                 }
             });
@@ -70,7 +82,18 @@ impl TraceWriter {
         Ok(())
     }
 
-    async fn flush_buffer(buffer: &Arc<Mutex<Vec<TraceRecord>>>, bucket: &str) -> Result<()> {
+    pub async fn flush(&self) -> Result<()> {
+        let buffer = self.buffer.clone();
+        let bucket = self.bucket_name.clone();
+        let store = self.store.clone();
+        Self::flush_buffer(&buffer, &bucket, store).await
+    }
+
+    async fn flush_buffer(
+        buffer: &Arc<Mutex<Vec<TraceRecord>>>,
+        bucket: &str,
+        store: Arc<dyn ObjectIO>,
+    ) -> Result<()> {
         let mut buffer_guard = buffer.lock().await;
         if buffer_guard.is_empty() {
             return Ok(());
@@ -79,10 +102,10 @@ impl TraceWriter {
         buffer_guard.clear();
         drop(buffer_guard);
 
-        Self::write_records(records, bucket).await
+        Self::write_records(records, bucket, store).await
     }
 
-    async fn write_records(records: Vec<TraceRecord>, bucket: &str) -> Result<()> {
+    async fn write_records(records: Vec<TraceRecord>, bucket: &str, store: Arc<dyn ObjectIO>) -> Result<()> {
         if records.is_empty() {
             return Ok(());
         }
@@ -111,9 +134,6 @@ impl TraceWriter {
         );
 
         // Upload to Storage
-        let object_layer =
-            new_object_layer_fn().ok_or_else(|| crate::error::TraceError::Storage("Object layer not initialized".to_string()))?;
-
         let data = Bytes::from(buf);
         let len = data.len() as i64;
         let cursor = std::io::Cursor::new(data);
@@ -125,7 +145,7 @@ impl TraceWriter {
 
         let opts = ObjectOptions::default();
 
-        let _ = object_layer
+        let _ = store
             .put_object(bucket, &path, &mut reader, &opts)
             .await
             .map_err(|e| crate::error::TraceError::Storage(e.to_string()))?;
@@ -184,7 +204,15 @@ impl TraceWriter {
             Arc::new(parent_span_id.finish()),
             Arc::new(service_name.finish()),
             Arc::new(operation_name.finish()),
-            Arc::new(start_time.finish()),
+            {
+                let start_time_array = start_time.finish();
+                let data = start_time_array.into_data();
+                let new_data = data
+                    .into_builder()
+                    .data_type(DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())))
+                    .build()?;
+                Arc::new(TimestampMicrosecondArray::from(new_data))
+            },
             Arc::new(duration_ns.finish()),
             Arc::new(status_code.finish()),
             Arc::new(status_message.finish()),

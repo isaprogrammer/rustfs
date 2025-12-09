@@ -92,6 +92,7 @@ rustfs-targets = { path = "crates/targets", version = "0.0.5" }
 rustfs-utils = { path = "crates/utils", version = "0.0.5" }
 rustfs-workers = { path = "crates/workers", version = "0.0.5" }
 rustfs-zip = { path = "./crates/zip", version = "0.0.5" }
+rustfs-trace-analytics = { path = "crates/trace-analytics", version = "0.0.5" }
 
 # Async Runtime and Networking
 async-channel = "2.5.0"
