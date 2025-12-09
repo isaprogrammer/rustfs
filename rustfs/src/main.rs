@@ -323,7 +323,7 @@ async fn run(opt: config::Opt) -> Result<()> {
         let rate = env::var("RUSTFS_TRACE_RATE")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(10);
+            .unwrap_or(1000);
 
         tokio::spawn(async move {
             let interval_ms = if rate == 0 { 1000 } else { 1000 / rate.max(1) };
