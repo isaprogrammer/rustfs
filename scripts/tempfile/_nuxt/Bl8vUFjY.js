@@ -1,0 +1,1 @@
+import{M as e}from"./BvexhTZs.js";const n=()=>{const{$api:t}=e();return{async getSystemInfo(){return await t.get("/info")},async getStorageInfo(){return await t.get("/storageinfo")},async getDataUsageInfo(){return await t.get("/datausageinfo")},async getSystemMetrics(){return await t.get("/metrics")},async getLicense(){return await t.get("/license")}}};export{n as u};

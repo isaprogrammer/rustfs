@@ -1,0 +1,1 @@
+import{M as s}from"./BvexhTZs.js";const u=()=>{const{$api:t}=s();return{addTiers:async e=>await t.put("/tier?force=false",e),updateTiers:async(e,r)=>await t.post(`/tier/${encodeURIComponent(e)}`,r),listTiers:async()=>await t.get("/tier"),removeTiers:async e=>await t.delete(`/tier/${encodeURIComponent(e)}?force=true`,{})}};export{u};

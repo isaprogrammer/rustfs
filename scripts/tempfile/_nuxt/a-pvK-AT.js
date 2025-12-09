@@ -1,0 +1,1 @@
+import{e as a,c as t,o,Y as c,I as r,n as l,X as p}from"./BvexhTZs.js";const _=a({__name:"action-bar",props:{class:{}},setup(e){const s=e;return(n,i)=>(o(),t("div",{class:r(l(p)("flex flex-wrap items-center justify-end gap-2",s.class))},[c(n.$slots,"default")],2))}}),f=Object.assign(_,{__name:"ActionBar"});export{f as _};

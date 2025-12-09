@@ -1,0 +1,1 @@
+import{M as n}from"./BvexhTZs.js";const g=()=>{const{$api:t}=n();return{async getEventsTargetList(){return await t.get("/target/list")},async updateEventTarget(e,a,r){return await t.put(`/target/${e}/${a}`,r)},async deleteEventTarget(e,a){return await t.delete(`/target/${e}/${a}/reset`)},async getEventTargetArnList(){return await t.get("/target/arns")}}};export{g as u};

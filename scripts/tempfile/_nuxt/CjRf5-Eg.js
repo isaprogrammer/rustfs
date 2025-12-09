@@ -1,0 +1,6 @@
+import{e as r,m as i,o as l,w as d,Y as n,n as a,ac as o,I as p,X as u}from"./BvexhTZs.js";import{c}from"./CNS46M7W.js";var f=r({__name:"VisuallyHidden",props:{feature:{type:String,required:!1,default:"focusable"},asChild:{type:Boolean,required:!1},as:{type:null,required:!1,default:"span"}},setup(s){return(e,t)=>(l(),i(a(o),{as:e.as,"as-child":e.asChild,"aria-hidden":e.feature==="focusable"?"true":void 0,"data-hidden":e.feature==="fully-hidden"?"":void 0,tabindex:e.feature==="fully-hidden"?"-1":void 0,style:{position:"absolute",border:0,width:"1px",height:"1px",padding:0,margin:"-1px",overflow:"hidden",clip:"rect(0, 0, 0, 0)",clipPath:"inset(50%)",whiteSpace:"nowrap",wordWrap:"normal",top:"-1px",left:"-1px"}},{default:d(()=>[n(e.$slots,"default")]),_:3},8,["as","as-child","aria-hidden","data-hidden","tabindex"]))}}),v=f;/**
+ * @license lucide-vue-next v0.487.0 - ISC
+ *
+ * This source code is licensed under the ISC license.
+ * See the LICENSE file in the root directory of this source tree.
+ */const h=c("loader-circle",[["path",{d:"M21 12a9 9 0 1 1-6.219-8.56",key:"13zald"}]]),b=r({__name:"Spinner",props:{class:{}},setup(s){const e=s;return(t,_)=>(l(),i(a(h),{role:"status","aria-label":"Loading",class:p(a(u)("size-4 animate-spin",e.class))},null,8,["class"]))}});export{v as V,b as _};

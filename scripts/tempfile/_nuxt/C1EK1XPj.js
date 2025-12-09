@@ -1,0 +1,1 @@
+import{e as a,c as t,o,Y as r,I as c,n as l,X as m}from"./BvexhTZs.js";const f=a({__name:"AlertTitle",props:{class:{}},setup(e){const s=e;return(n,i)=>(o(),t("h5",{class:c(l(m)("mb-1 font-medium leading-none tracking-tight",s.class))},[r(n.$slots,"default")],2))}});export{f as _};

@@ -1,0 +1,1 @@
+import{_ as o}from"./DlAUqK2U.js";import{c as s,o as t,Y as c}from"./BvexhTZs.js";const n={},_={class:"flex flex-col gap-6"};function r(e,a){return t(),s("div",_,[c(e.$slots,"default")])}const m=Object.assign(o(n,[["render",r]]),{__name:"Page"});export{m as _};
