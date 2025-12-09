@@ -12,53 +12,90 @@ use rustfs_rio::{HashReader, WarpReader};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{Mutex, mpsc, oneshot};
-use tracing::{error, info};
+use tracing::{error, info, warn};
+
+/// Worker 控制消息
+enum WorkerMsg {
+    Record(TraceRecord),
+    Shutdown,
+}
 
 pub struct TraceWriter {
-    tx: mpsc::Sender<TraceRecord>,
-    // 用于等待后台 worker 退出；Mutex 是为了能在 &self 上 take()
+    tx: Mutex<Option<mpsc::Sender<WorkerMsg>>>,
     done_rx: Mutex<Option<oneshot::Receiver<()>>>,
 }
 
 impl TraceWriter {
-    pub fn new(bucket: String, max_buffer_size: usize, flush_interval: Duration, store: Arc<dyn ObjectIO>) -> Self {
-        let (tx, rx) = mpsc::channel::<TraceRecord>(max_buffer_size * 2);
+    pub fn new(
+        bucket: String,
+        max_buffer_size: usize,
+        flush_interval: Duration,
+        store: Arc<dyn ObjectIO>,
+    ) -> Self {
+        let (tx, rx) = mpsc::channel::<WorkerMsg>(max_buffer_size * 2);
         let (done_tx, done_rx) = oneshot::channel::<()>();
 
-        // spawn worker，worker 退出前发送 done_tx
         tokio::spawn(async move {
             let mut worker = TraceWriterWorker::new(bucket, max_buffer_size, flush_interval, store);
             worker.run(rx).await;
-            // 忽略 send 错误（接收端可能已被 drop）
             let _ = done_tx.send(());
         });
 
         Self {
-            tx,
+            tx: Mutex::new(Some(tx)),
             done_rx: Mutex::new(Some(done_rx)),
         }
     }
 
     #[inline]
     pub async fn write(&self, record: TraceRecord) -> Result<()> {
-        // 写路径无锁，最高性能
-        if let Err(e) = self.tx.send(record).await {
-            error!("Failed to flush trace buffer: {:?}", e);
+        let tx = self.tx.lock().await;
+        if let Some(sender) = tx.as_ref() {
+            sender
+                .send(WorkerMsg::Record(record))
+                .await
+                .map_err(|e| crate::error::TraceError::Storage(format!("Channel send failed: {:?}", e)))?;
+            Ok(())
+        } else {
+            Err(crate::error::TraceError::Storage(
+                "TraceWriter已关闭".to_string(),
+            ))
         }
-        Ok(())
     }
 
     /// 等待后台 worker 安全退出并保证所有数据已 flush
-    pub async fn shutdown(&self) {
-        // drop sender => worker 的 rx.recv() 会在耗尽后返回 None，从而退出 loop
-        // 通过克隆后 drop 来释放本 sender 的所有权
-        // 当所有 Sender 被 drop 时，Receiver 接收 None 并最终退出 worker
-        // 注意：如果你持有其它 Sender clones，也必须 drop 它们
-        let _ = std::mem::drop(self.tx.clone());
+    pub async fn shutdown(&self) -> Result<()> {
+        // 1. 取出并 drop sender，发送关闭信号
+        let tx = self.tx.lock().await.take();
+        if let Some(sender) = tx {
+            // 发送显式关闭消息（可选，也可以直接 drop）
+            let _ = sender.send(WorkerMsg::Shutdown).await;
+            drop(sender);
+        }
 
-        // 等待 worker 发回完成信号（如果还能接收的话）
+        // 2. 等待 worker 完成
         if let Some(done_rx) = self.done_rx.lock().await.take() {
-            let _ = done_rx.await;
+            done_rx
+                .await
+                .map_err(|e| crate::error::TraceError::Storage(format!("Worker shutdown failed: {:?}", e)))?;
+        }
+
+        info!("TraceWriter shutdown完成");
+        Ok(())
+    }
+}
+
+impl Drop for TraceWriter {
+    fn drop(&mut self) {
+        // 检查是否有未完成的 shutdown
+        let tx = self.tx.blocking_lock();
+        let done_rx = self.done_rx.blocking_lock();
+
+        if tx.is_some() || done_rx.is_some() {
+            warn!(
+                "TraceWriter dropped without proper shutdown! 可能有数据未刷盘。\
+                 请确保在 drop 前调用 shutdown().await"
+            );
         }
     }
 }
@@ -69,7 +106,10 @@ struct TraceWriterWorker {
     batch_size: usize,
     flush_interval: Duration,
 
-    // 高性能 builder
+    // 高性能 builder - 保留容量配置
+    builder_capacity: usize,
+    builder_data_capacity: usize,
+
     trace_id: StringBuilder,
     span_id: StringBuilder,
     parent_span_id: StringBuilder,
@@ -85,24 +125,34 @@ struct TraceWriterWorker {
 }
 
 impl TraceWriterWorker {
-    fn new(bucket: String, batch_size: usize, flush_interval: Duration, store: Arc<dyn ObjectIO>) -> Self {
-        // 所有 builder 都提前预分配
+    fn new(
+        bucket: String,
+        batch_size: usize,
+        flush_interval: Duration,
+        store: Arc<dyn ObjectIO>,
+    ) -> Self {
+        let builder_capacity = batch_size;
+        let builder_data_capacity = batch_size * 16;
+
         Self {
             bucket,
             store,
             batch_size,
             flush_interval,
+            builder_capacity,
+            builder_data_capacity,
 
-            trace_id: StringBuilder::with_capacity(batch_size, batch_size * 16),
-            span_id: StringBuilder::with_capacity(batch_size, batch_size * 16),
-            parent_span_id: StringBuilder::with_capacity(batch_size, batch_size * 16),
-            service_name: StringBuilder::with_capacity(batch_size, batch_size * 16),
-            operation_name: StringBuilder::with_capacity(batch_size, batch_size * 16),
+            trace_id: StringBuilder::with_capacity(builder_capacity, builder_data_capacity),
+            span_id: StringBuilder::with_capacity(builder_capacity, builder_data_capacity),
+            parent_span_id: StringBuilder::with_capacity(builder_capacity, builder_data_capacity),
+            service_name: StringBuilder::with_capacity(builder_capacity, builder_data_capacity),
+            operation_name: StringBuilder::with_capacity(builder_capacity, builder_data_capacity),
 
-            start_time: TimestampMicrosecondBuilder::with_capacity(batch_size),
-            duration_ns: UInt64Builder::with_capacity(batch_size),
-            status_code: Int32Builder::with_capacity(batch_size),
-            status_message: StringBuilder::with_capacity(batch_size, batch_size * 16),
+            start_time: TimestampMicrosecondBuilder::with_capacity(builder_capacity)
+                .with_timezone("UTC"),
+            duration_ns: UInt64Builder::with_capacity(builder_capacity),
+            status_code: Int32Builder::with_capacity(builder_capacity),
+            status_message: StringBuilder::with_capacity(builder_capacity, builder_data_capacity),
 
             tags_builder: MapBuilder::new(None, StringBuilder::new(), StringBuilder::new()),
 
@@ -110,28 +160,47 @@ impl TraceWriterWorker {
         }
     }
 
-    async fn run(&mut self, mut rx: mpsc::Receiver<TraceRecord>) {
+    async fn run(&mut self, mut rx: mpsc::Receiver<WorkerMsg>) {
         let mut ticker = tokio::time::interval(self.flush_interval);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
             tokio::select! {
-                Some(rec) = rx.recv() => {
-                    self.append(rec);
-                    if self.row_count >= self.batch_size {
-                        if let Err(e) = self.flush().await {
-                            error!("flush failed: {:?}", e);
+                msg = rx.recv() => {
+                    match msg {
+                        Some(WorkerMsg::Record(rec)) => {
+                            self.append(rec);
+                            if self.row_count >= self.batch_size {
+                                if let Err(e) = self.flush().await {
+                                    error!("flush failed: {:?}", e);
+                                }
+                            }
+                        }
+                        Some(WorkerMsg::Shutdown) | None => {
+                            // 收到关闭信号或 channel 关闭
+                            info!("TraceWriter worker收到关闭信号，准备最终flush");
+                            if self.row_count > 0 {
+                                if let Err(e) = self.flush().await {
+                                    error!("最终flush失败: {:?}", e);
+                                } else {
+                                    info!("最终flush成功");
+                                }
+                            }
+                            break;
                         }
                     }
                 }
                 _ = ticker.tick() => {
                     if self.row_count > 0 {
                         if let Err(e) = self.flush().await {
-                            error!("periodic flush failed: {:?}", e);
+                            error!("定期flush失败: {:?}", e);
                         }
                     }
                 }
             }
         }
+
+        info!("TraceWriter worker退出");
     }
 
     #[inline]
@@ -155,7 +224,6 @@ impl TraceWriterWorker {
             None => self.status_message.append_null(),
         }
 
-        // 更高效的 tag 写法
         for (k, v) in r.tags {
             self.tags_builder.keys().append_value(k);
             self.tags_builder.values().append_value(v);
@@ -173,7 +241,6 @@ impl TraceWriterWorker {
         let schema = TraceRecord::get_arrow_schema();
         let batch = self.finish_batch(schema.clone())?;
 
-        // Parquet 写入逻辑不改动
         let mut buf = Vec::new();
         let props = WriterProperties::builder().build();
         {
@@ -189,15 +256,8 @@ impl TraceWriterWorker {
     }
 
     fn finish_batch(&mut self, schema: SchemaRef) -> Result<RecordBatch> {
-        let ts = {
-            let arr = self.start_time.finish();
-            let data = arr.into_data();
-            let new_data = data
-                .into_builder()
-                .data_type(DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())))
-                .build()?;
-            Arc::new(TimestampMicrosecondArray::from(new_data)) as ArrayRef
-        };
+        // 直接使用带时区的 TimestampMicrosecondArray，无需额外转换
+        let ts = Arc::new(self.start_time.finish()) as ArrayRef;
 
         let columns: Vec<ArrayRef> = vec![
             Arc::new(self.trace_id.finish()),
@@ -216,16 +276,24 @@ impl TraceWriterWorker {
     }
 
     fn reset_builders(&mut self) {
-        self.trace_id = StringBuilder::new();
-        self.span_id = StringBuilder::new();
-        self.parent_span_id = StringBuilder::new();
-        self.service_name = StringBuilder::new();
-        self.operation_name = StringBuilder::new();
-        self.start_time = TimestampMicrosecondBuilder::new();
-        self.duration_ns = UInt64Builder::new();
-        self.status_code = Int32Builder::new();
-        self.status_message = StringBuilder::new();
+        // 保留容量，避免重新分配
+        let cap = self.builder_capacity;
+        let data_cap = self.builder_data_capacity;
+
+        self.trace_id = StringBuilder::with_capacity(cap, data_cap);
+        self.span_id = StringBuilder::with_capacity(cap, data_cap);
+        self.parent_span_id = StringBuilder::with_capacity(cap, data_cap);
+        self.service_name = StringBuilder::with_capacity(cap, data_cap);
+        self.operation_name = StringBuilder::with_capacity(cap, data_cap);
+
+        self.start_time = TimestampMicrosecondBuilder::with_capacity(cap)
+            .with_timezone("UTC");
+        self.duration_ns = UInt64Builder::with_capacity(cap);
+        self.status_code = Int32Builder::with_capacity(cap);
+        self.status_message = StringBuilder::with_capacity(cap, data_cap);
+
         self.tags_builder = MapBuilder::new(None, StringBuilder::new(), StringBuilder::new());
+
         self.row_count = 0;
     }
 
@@ -244,8 +312,8 @@ impl TraceWriterWorker {
         let len = data.len() as i64;
         let cursor = std::io::Cursor::new(data);
         let reader = Box::new(WarpReader::new(cursor));
-        let hash_reader =
-            HashReader::new(reader, len, len, None, None, false).map_err(|e| crate::error::TraceError::Storage(e.to_string()))?;
+        let hash_reader = HashReader::new(reader, len, len, None, None, false)
+            .map_err(|e| crate::error::TraceError::Storage(e.to_string()))?;
 
         let mut reader = PutObjReader::new(hash_reader);
         let opts = ObjectOptions::default();
