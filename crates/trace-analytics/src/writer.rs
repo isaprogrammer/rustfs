@@ -285,21 +285,22 @@ impl BuilderSet {
         self.row_count += 1;
     }
 
-    /// 构建 RecordBatch（使用字典数组）
     fn finish_batch(&mut self, schema: SchemaRef) -> Result<RecordBatch> {
-        // 构建字典数组：service_name
-        let service_dict_values = Arc::new(StringArray::from(self.service_name_values.clone()));
-        let service_dict_keys = self.service_name_keys.finish_cloned();
-        let service_name_array = Arc::new(
-            DictionaryArray::<UInt32Type>::try_new(service_dict_keys, service_dict_values)?
-        ) as ArrayRef;
+        let service_keys = self.service_name_keys.finish_cloned();
+        let mut service_builder = StringBuilder::with_capacity(self.row_count, self.data_capacity);
+        for i in 0..service_keys.len() {
+            let k = service_keys.value(i) as usize;
+            service_builder.append_value(&self.service_name_values[k]);
+        }
+        let service_name_array: ArrayRef = Arc::new(service_builder.finish());
 
-        // 构建字典数组：operation_name
-        let operation_dict_values = Arc::new(StringArray::from(self.operation_name_values.clone()));
-        let operation_dict_keys = self.operation_name_keys.finish_cloned();
-        let operation_name_array = Arc::new(
-            DictionaryArray::<UInt32Type>::try_new(operation_dict_keys, operation_dict_values)?
-        ) as ArrayRef;
+        let operation_keys = self.operation_name_keys.finish_cloned();
+        let mut operation_builder = StringBuilder::with_capacity(self.row_count, self.data_capacity);
+        for i in 0..operation_keys.len() {
+            let k = operation_keys.value(i) as usize;
+            operation_builder.append_value(&self.operation_name_values[k]);
+        }
+        let operation_name_array: ArrayRef = Arc::new(operation_builder.finish());
 
         let columns: Vec<ArrayRef> = vec![
             Arc::new(self.trace_id.finish_cloned()),
