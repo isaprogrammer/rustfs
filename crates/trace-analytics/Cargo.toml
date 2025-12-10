@@ -19,8 +19,9 @@ uuid = { workspace = true }
 tracing = { workspace = true }
 bytes = { workspace = true }
 thiserror = "1.0"
+crossbeam-queue = "0.3"
 object_store = { version = "0.12", features = ["aws"] }
 
 [dev-dependencies]
-uuid = { version = "1.10", features = ["v4"] }
+uuid = { version = "1.19", features = ["v4"] }
 

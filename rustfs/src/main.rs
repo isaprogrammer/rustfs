@@ -324,6 +324,7 @@ async fn run(opt: config::Opt) -> Result<()> {
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(1000);
+        let ctx_clone = ctx.clone();
 
         tokio::spawn(async move {
             let interval_ms = if rate == 0 { 1000 } else { 1000 / rate.max(1) };
@@ -331,6 +332,10 @@ async fn run(opt: config::Opt) -> Result<()> {
 
             loop {
                 tokio::select! {
+                    _ = ctx_clone.cancelled() => {
+                        let _ = writer.shutdown().await;
+                        break;
+                    }
                     _ = ticker.tick() => {
                         let mut tags = HashMap::new();
                         tags.insert("http.method".to_string(), "GET".to_string());

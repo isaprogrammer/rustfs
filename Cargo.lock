@@ -7571,6 +7571,7 @@ version = "0.0.5"
 dependencies = [
  "bytes",
  "chrono",
+ "crossbeam-queue",
  "datafusion",
  "object_store",
  "rustfs-ecstore",
